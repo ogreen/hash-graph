@@ -39,23 +39,23 @@ def resetCounter(counterArray):
         counterArray[idx]=0
         
 @cuda.jit
-def countHashBins(hashA, counterArray, binCounts):
+def countHashBins(hashA, counterArray, binSize):
     start  = cuda.grid(1)
     stride = cuda.gridsize(1)
     size   = hashA.shape[0]
     for idx in range(start, size, stride):
-        mybin = hashA[idx]/binCounts
+        mybin = int(hashA[idx]//binSize)
         # one = 1
         cuda.atomic.add(counterArray,mybin,1)
 
 
 @cuda.jit
-def reOrderInput(inputA,hashA, d_InputAReOrdered, binCounts, counterArray, prefixArray):
+def reOrderInput(inputA,hashA, d_InputAReOrdered, binSize, counterArray, prefixArray):
     start  = cuda.grid(1)
     stride = cuda.gridsize(1)
     size   = inputA.shape[0]
     for idx in range(start, size, stride):
-        mybin = int(hashA[idx]/binCounts)
+        mybin = int(hashA[idx]//binSize)
         pos = cuda.atomic.add(counterArray,mybin,1) + prefixArray[mybin]
         d_InputAReOrdered[pos]=inputA[idx] # Todo store index
 
@@ -68,20 +68,35 @@ def reOrderHash(hashAReordered, counterArray):
     for idx in range(start, size, stride):
         cuda.atomic.add(counterArray,hashAReordered[idx],1)
 
+    # idx  = cuda.grid(1)
+    # size   = hashAReordered.shape[0]
+    # if(idx>=size):
+    #   return
+    # cuda.atomic.add(counterArray,hashAReordered[idx],1)
+
 @cuda.jit
-def fillTable(table,hashAReordered,d_InputAReOrdered,binCounts, counterArray,prefixArray):
-    start  = cuda.grid(1)
-    stride = cuda.gridsize(1)
+def fillTable(table,hashAReordered,d_InputAReOrdered, counterArray,prefixArray):
+    # start  = cuda.grid(1)
+    # stride = cuda.gridsize(1)
+    # size   = hashAReordered.shape[0]
+    # for idx in range(start, size, stride):
+    #     pos = cuda.atomic.add(counterArray,hashAReordered[idx],1)+prefixArray[hashAReordered[idx]]
+    #     table[pos] = d_InputAReOrdered[idx]
+    idx  = cuda.grid(1)
     size   = hashAReordered.shape[0]
-    for idx in range(start, size, stride):
-        pos = cuda.atomic.add(counterArray,hashAReordered[idx],1)+prefixArray[hashAReordered[idx]]
-        table[pos] = d_InputAReOrdered[idx]
+    if(idx>=size):
+      return
+    pos = cuda.atomic.add(counterArray,hashAReordered[idx],1)+prefixArray[hashAReordered[idx]]
+    table[pos] = d_InputAReOrdered[idx]
 
 inputSize = 1<<25
 low = 0
-high = inputSize >> 5
-hashRange = inputSize
+high = inputSize 
+hashRange = inputSize >> 2
 numBins = 1<<16
+binSize = (inputSize+numBins-1)//numBins
+print(binSize)
+print(type(binSize))
 
 inputA = np.random.randint(low,high,inputSize)
 
@@ -108,30 +123,49 @@ blocks_per_grid   = 512
 for i in range(4):
 
   gdf = DataFrame()
+  # d_inputA = cuda.to_device(inputA)
+  cuda.synchronize()
+
   gdf["a"] = d_inputA
-  gdf["b"] = d_InputAReOrdered
 
   start = time.time()
 
 
   d_HashA = gdf.hash_columns(["a"])
   normailizeHashArray[blocks_per_grid, threads_per_block](d_HashA,hashRange)
+
   resetCounter[blocks_per_grid, threads_per_block](d_BinCounterArray)
-  countHashBins[blocks_per_grid, threads_per_block](d_HashA,d_BinCounterArray,numBins)
+  countHashBins[blocks_per_grid, threads_per_block](d_HashA,d_BinCounterArray,binSize)
   d_BinPrefixSum = numba.cuda.to_device(cupy.cumsum(d_BinCounterArray,dtype=np.int32))
+
+  # print(numba.cuda.to_device(d_HashA).copy_to_host())
+  # print(d_BinCounterArray.copy_to_host())
+  # print(numba.cuda.to_device(d_BinPrefixSum).copy_to_host())
+  # continue
   
   resetCounter[blocks_per_grid, threads_per_block](d_BinCounterArray)
-  reOrderInput[blocks_per_grid, threads_per_block](d_inputA,d_HashA,d_InputAReOrdered, numBins, d_BinCounterArray, d_BinPrefixSum)
+  reOrderInput[blocks_per_grid, threads_per_block](d_inputA,d_HashA,d_InputAReOrdered, binSize, d_BinCounterArray, d_BinPrefixSum)
 
+  # cuda.synchronize()
+  # continue;
+
+  gdf["b"] = d_InputAReOrdered
   d_HashA = gdf.hash_columns(["b"])
   normailizeHashArray[blocks_per_grid, threads_per_block](d_HashA,hashRange)
   
   resetCounter[blocks_per_grid, threads_per_block](d_CounterArray)
-  reOrderHash[blocks_per_grid, threads_per_block](d_HashA, d_CounterArray)
+  bp2 = (inputSize + (threads_per_block - 1)) // threads_per_block
+  # # print(bp2)
+  # # print("hi")
+  reOrderHash[bp2, threads_per_block](d_HashA, d_CounterArray)
+  # reOrderHash[blocks_per_grid, threads_per_block](d_HashA, d_CounterArray)
+
   d_PrefixSum = numba.cuda.to_device(cupy.cumsum(d_CounterArray,dtype=np.int32))
 
   resetCounter[blocks_per_grid, threads_per_block](d_CounterArray)
-  fillTable[blocks_per_grid, threads_per_block](d_Table,d_HashA,d_InputAReOrdered,numBins, d_CounterArray,d_PrefixSum)
+  # fillTable[blocks_per_grid, threads_per_block](d_Table,d_HashA,d_InputAReOrdered,numBins, d_CounterArray,d_PrefixSum)
+
+  fillTable[bp2, threads_per_block](d_Table,d_HashA,d_InputAReOrdered, d_CounterArray,d_PrefixSum)
 
 # # hashA, hashAReordered, binCounts, counterArray, prefixArray
   # print(d_CounterArray.copy_to_host())
@@ -149,8 +183,8 @@ for i in range(4):
 #   print(d_BinPrefixSum.dtype)
   cuda.synchronize()
   thisTime = time.time()-start
-  print('Time taken = %.3e seconds'%(thisTime))
-  print('Rate = %.3e seconds'%((inputSize)/thisTime))
+  print('Time taken = %2.6e seconds'%(thisTime))
+  print('Rate = %.5e seconds'%((inputSize)/thisTime))
   # print(d_HashA)
 # res = d_hash.copy_to_host()
 #print(number)
