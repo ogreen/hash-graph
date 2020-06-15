@@ -20,8 +20,6 @@ from cudf.tests import utils
 
 
 
-
-
 @cuda.jit
 def normailizeHashArray(inputArray, hashRange):
     start  = cuda.grid(1)
@@ -55,40 +53,19 @@ def reOrderInput(inputA,hashA, d_InputAReOrdered, binSize, counterArray, prefixA
     size   = inputA.shape[0]
     for idx in range(start, size, stride):
         mybin = int(hashA[idx]//binSize)
-        # if (mybin==0):
-        # 	print(hashA[idx])
         pos = cuda.atomic.add(counterArray,mybin,1) + prefixArray[mybin]
-        # if (pos==0):
-        # 	print(pos,hashA[idx],inputA[idx])
-
         d_InputAReOrdered[pos]=inputA[idx] # Todo store index
-        # if (pos==0):
-        # 	print(idx,pos,hashA[idx],inputA[idx],d_InputAReOrdered[pos])
 
 
 @cuda.jit
 def reOrderHash(hashAReordered, counterArray):
-    # start  = cuda.grid(1)
-    # stride = cuda.gridsize(1)
-    # size   = hashAReordered.shape[0]
-    # for idx in range(start, size, stride):
-    #     cuda.atomic.add(counterArray,hashAReordered[idx],1)
-
     idx  = cuda.grid(1)
     size   = hashAReordered.shape[0]
     if(idx<size):
       cuda.atomic.add(counterArray,hashAReordered[idx]+1,1)
-    # if(idx < 500):
-    # 	print(hashAReordered[idx])
 
 @cuda.jit
 def fillTable(table,hashAReordered,d_InputAReOrdered, counterArray,prefixArray):
-    # start  = cuda.grid(1)
-    # stride = cuda.gridsize(1)
-    # size   = hashAReordered.shape[0]
-    # for idx in range(start, size, stride):
-    #     pos = cuda.atomic.add(counterArray,hashAReordered[idx],1)+prefixArray[hashAReordered[idx]]
-    #     table[pos] = d_InputAReOrdered[idx]
     idx  = cuda.grid(1)
     size   = hashAReordered.shape[0]
     if(idx<size):
@@ -101,15 +78,11 @@ high = inputSize
 hashRange = inputSize >> 2
 numBins = 1<<16
 binSize = (hashRange+numBins-1)//numBins
-# print(binSize)
-# print(type(binSize))
 
 inputA = np.random.randint(low,high,inputSize,dtype=np.int32)
 
 
 d_inputA           = cuda.device_array(inputA.shape, dtype=np.int32)
-
-# d_inputA          = cuda.to_device(inputA)
 d_inputA           = cuda.to_device(inputA)
 print(d_inputA.dtype)
 
@@ -144,6 +117,7 @@ for i in range(10):
   start = time.time()
 
   gdf["a"] = d_inputA
+  gdf["b"] = d_InputAReOrdered
   d_HashA = gdf.hash_columns(["a"])
   normailizeHashArray[blocks_per_grid, threads_per_block](d_HashA,hashRange)
 
@@ -151,35 +125,20 @@ for i in range(10):
   countHashBins[blocks_per_grid, threads_per_block](d_HashA,d_BinCounterArray,binSize)
   d_BinPrefixSum = numba.cuda.to_device(cupy.cumsum(d_BinCounterArray,dtype=np.uintc))
 
-  # print(numba.cuda.to_device(d_HashA).copy_to_host())
-  # print(d_BinCounterArray.copy_to_host()[-25:])
-  # print(numba.cuda.to_device(d_BinPrefixSum).copy_to_host())
-  # continue
-  
   resetCounter[blocks_per_grid, threads_per_block](d_BinCounterArray)
   reOrderInput[blocks_per_grid, threads_per_block](d_inputA,d_HashA,d_InputAReOrdered, binSize, d_BinCounterArray, d_BinPrefixSum)
 
-  cuda.synchronize()
   # continue;
-  gdf["b"] = d_InputAReOrdered
   d_HashA2 = gdf.hash_columns(["b"])
-  cuda.synchronize()
   normailizeHashArray[blocks_per_grid, threads_per_block](d_HashA2,hashRange)
     
-  # cuda.synchronize()
-  # print(numba.cuda.to_device(d_HashA2).copy_to_host())
-  # print(numba.cuda.to_device(d_HashA).copy_to_host())
-  # print(d_InputAReOrdered.copy_to_host())
-
   
   resetCounter[blocks_per_grid, threads_per_block](d_CounterArray)
   bp2 = (inputSize + (threads_per_block - 1)) // threads_per_block
   reOrderHash[bp2, threads_per_block](d_HashA2, d_CounterArray)
-  # reOrderHash[blocks_per_grid, threads_per_block](d_HashA2, d_CounterArray)
+
 
   d_PrefixSum = numba.cuda.to_device(cupy.cumsum(d_CounterArray,dtype=np.uintc))
-  # print(d_CounterArray.copy_to_host()[1:])
-  # print(d_PrefixSum.copy_to_host())
   resetCounter[blocks_per_grid, threads_per_block](d_CounterArray)
   # fillTable[blocks_per_grid, threads_per_block](d_Table,d_HashA2,d_InputAReOrdered, d_CounterArray,d_PrefixSum)
   fillTable[bp2, threads_per_block]            (d_Table,d_HashA2,d_InputAReOrdered, d_CounterArray,d_PrefixSum)
@@ -188,13 +147,6 @@ for i in range(10):
   thisTime = time.time()-start
   print('Time taken = %2.6e seconds'%(thisTime))
   print('Rate = %.5e keys/sec'%((inputSize)/thisTime))
-  # print(d_HashA)
-# res = d_hash.copy_to_host()
-#print(number)
-# print(np.sum(res, dtype=np.int64))
-
-# out_one = cupy.asnumpy(gdf.hash_columns(["a"]))
-# print(out_one)
 
 
 # # hashA, hashAReordered, binCounts, counterArray, prefixArray
