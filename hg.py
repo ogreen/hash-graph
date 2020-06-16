@@ -72,38 +72,34 @@ def fillTable(table,hashAReordered,d_InputAReOrdered, counterArray,prefixArray):
       pos = cuda.atomic.add(counterArray,hashAReordered[idx],1)+prefixArray[hashAReordered[idx]]
       table[pos] = d_InputAReOrdered[idx]
 
-inputSize = 1<<25
+inputSize = 1<<28
 low = 0
 high = inputSize 
 hashRange = inputSize >> 2
-numBins = 1<<16
+numBins = 1<<14
 binSize = (hashRange+numBins-1)//numBins
 
 inputA = np.random.randint(low,high,inputSize,dtype=np.int32)
 
 
-d_inputA           = cuda.device_array(inputA.shape, dtype=np.int32)
+d_inputA           = cuda.device_array(inputA.shape, dtype=inputA.dtype)
+d_InputAReOrdered  = cuda.device_array(d_inputA.shape, dtype=inputA.dtype)
+d_Table            = cuda.device_array(d_inputA.shape, dtype=inputA.dtype)
+
 d_inputA           = cuda.to_device(inputA)
-print(d_inputA.dtype)
+
 
 d_HashA            = cuda.device_array(d_inputA.shape, dtype=np.uintc)
 d_HashA2           = cuda.device_array(d_inputA.shape, dtype=np.uintc)
-d_InputAReOrdered  = cuda.device_array(d_inputA.shape, dtype=np.int32)
-
-d_Table = cuda.device_array(d_inputA.shape, dtype=np.int32)
-
-
 
 # Arrays used for HashGraph proceess (size of the hash-range)
 d_CounterArray    = cuda.device_array(hashRange+1, dtype=np.uintc)
 d_PrefixSum       = cuda.device_array(hashRange+1, dtype=np.uintc)
 
-# print(d_CounterArray.dtype)
 
 d_BinCounterArray = cuda.device_array(numBins+1, dtype=np.uintc)
 d_BinPrefixSum    = cuda.device_array(numBins+1, dtype=np.uintc)
 
-print(d_HashA.shape[0])
 threads_per_block = 512
 blocks_per_grid   = 512
 
