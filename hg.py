@@ -72,118 +72,139 @@ def fillTable(table,hashAReordered,d_InputAReOrdered, counterArray,prefixArray):
       pos = cuda.atomic.add(counterArray,hashAReordered[idx],1)+prefixArray[hashAReordered[idx]]
       table[pos] = d_InputAReOrdered[idx]
 
+
+
+class HashGraph:
+
+  threads_per_block = 512
+  blocks_per_grid   = 512
+
+
+  def __init__(self, d_inputA, numBins=1<<14):
+
+    self.numBins = numBins
+    self.hashRange = (d_inputA.shape[0]) >> 2
+    self.binSize = (self.hashRange+numBins-1)//numBins
+
+    self.d_table           = cuda.device_array(d_inputA.shape, dtype=inputA.dtype)
+    self.d_PrefixSum       = cuda.device_array(self.hashRange+1, dtype=np.uintc)
+    self.build()
+
+  def build(self):
+    d_InputAReOrdered  = cuda.device_array(d_inputA.shape, dtype=inputA.dtype)
+
+    d_HashA            = cuda.device_array(d_inputA.shape, dtype=np.uintc)
+    # d_hashA           = cuda.device_array(d_inputA.shape, dtype=np.uintc)
+
+    # Arrays used for HashGraph proceess (size of the hash-range)
+    d_CounterArray    = cuda.device_array(self.hashRange+1, dtype=np.uintc)
+
+
+    d_BinCounterArray = cuda.device_array(self.numBins+1, dtype=np.uintc)
+    d_BinPrefixSum    = cuda.device_array(self.numBins+1, dtype=np.uintc)
+
+
+    start = time.time()
+
+    gdf = DataFrame()
+
+    gdf["a"] = d_inputA
+    gdf["b"] = d_InputAReOrdered
+    d_HashA = gdf.hash_columns(["a"])
+    normailizeHashArray[HashGraph.blocks_per_grid,HashGraph.threads_per_block](d_HashA,self.hashRange)
+
+    resetCounter[HashGraph.blocks_per_grid, HashGraph.threads_per_block](d_BinCounterArray)
+    countHashBins[HashGraph.blocks_per_grid, HashGraph.threads_per_block](d_HashA,d_BinCounterArray,self.binSize)
+    d_BinPrefixSum = numba.cuda.to_device(cupy.cumsum(d_BinCounterArray,dtype=np.uintc))
+
+    resetCounter[HashGraph.blocks_per_grid, HashGraph.threads_per_block](d_BinCounterArray)
+    reOrderInput[HashGraph.blocks_per_grid, HashGraph.threads_per_block](d_inputA,d_HashA,d_InputAReOrdered, self.binSize, d_BinCounterArray, d_BinPrefixSum)
+
+    # continue;
+    d_hashA = gdf.hash_columns(["b"])
+    normailizeHashArray[HashGraph.blocks_per_grid, HashGraph.threads_per_block](d_hashA,self.hashRange)
+      
+    
+    resetCounter[HashGraph.blocks_per_grid, HashGraph.threads_per_block](d_CounterArray)
+    bp2 = (inputSize + (HashGraph.threads_per_block - 1)) // HashGraph.threads_per_block
+    reOrderHash[bp2, HashGraph.threads_per_block](d_hashA, d_CounterArray)
+
+
+    self.d_PrefixSum = numba.cuda.to_device(cupy.cumsum(d_CounterArray,dtype=np.uintc))
+    resetCounter[HashGraph.blocks_per_grid, HashGraph.threads_per_block](d_CounterArray)
+    fillTable[bp2, HashGraph.threads_per_block]            (self.d_table,d_hashA,d_InputAReOrdered, d_CounterArray,self.d_PrefixSum)
+
+    cuda.synchronize()
+
+    thisTime = time.time()-start
+    print('Time taken = %2.6e seconds'%(thisTime))
+    print('Rate = %.5e keys/sec'%((inputSize)/thisTime))
+
+
+
+
 inputSize = 1<<28
 low = 0
 high = inputSize 
-hashRange = inputSize >> 2
-numBins = 1<<14
-binSize = (hashRange+numBins-1)//numBins
+# hashRange = inputSize >> 2
+# numBins = 1<<14
+# binSize = (hashRange+numBins-1)//numBins
 
 inputA = np.random.randint(low,high,inputSize,dtype=np.int32)
 
 
 d_inputA           = cuda.device_array(inputA.shape, dtype=inputA.dtype)
-d_InputAReOrdered  = cuda.device_array(d_inputA.shape, dtype=inputA.dtype)
-d_Table            = cuda.device_array(d_inputA.shape, dtype=inputA.dtype)
-
 d_inputA           = cuda.to_device(inputA)
-
-
-d_HashA            = cuda.device_array(d_inputA.shape, dtype=np.uintc)
-d_HashA2           = cuda.device_array(d_inputA.shape, dtype=np.uintc)
-
-# Arrays used for HashGraph proceess (size of the hash-range)
-d_CounterArray    = cuda.device_array(hashRange+1, dtype=np.uintc)
-d_PrefixSum       = cuda.device_array(hashRange+1, dtype=np.uintc)
-
-
-d_BinCounterArray = cuda.device_array(numBins+1, dtype=np.uintc)
-d_BinPrefixSum    = cuda.device_array(numBins+1, dtype=np.uintc)
-
-threads_per_block = 512
-blocks_per_grid   = 512
 
 
 for i in range(10):
 
-  gdf = DataFrame()
-  # d_inputA = cuda.to_device(inputA)
-  cuda.synchronize()
-
   start = time.time()
-
-  gdf["a"] = d_inputA
-  gdf["b"] = d_InputAReOrdered
-  d_HashA = gdf.hash_columns(["a"])
-  normailizeHashArray[blocks_per_grid, threads_per_block](d_HashA,hashRange)
-
-  resetCounter[blocks_per_grid, threads_per_block](d_BinCounterArray)
-  countHashBins[blocks_per_grid, threads_per_block](d_HashA,d_BinCounterArray,binSize)
-  d_BinPrefixSum = numba.cuda.to_device(cupy.cumsum(d_BinCounterArray,dtype=np.uintc))
-
-  resetCounter[blocks_per_grid, threads_per_block](d_BinCounterArray)
-  reOrderInput[blocks_per_grid, threads_per_block](d_inputA,d_HashA,d_InputAReOrdered, binSize, d_BinCounterArray, d_BinPrefixSum)
-
-  # continue;
-  d_HashA2 = gdf.hash_columns(["b"])
-  normailizeHashArray[blocks_per_grid, threads_per_block](d_HashA2,hashRange)
-    
-  
-  resetCounter[blocks_per_grid, threads_per_block](d_CounterArray)
-  bp2 = (inputSize + (threads_per_block - 1)) // threads_per_block
-  reOrderHash[bp2, threads_per_block](d_HashA2, d_CounterArray)
-
-
-  d_PrefixSum = numba.cuda.to_device(cupy.cumsum(d_CounterArray,dtype=np.uintc))
-  resetCounter[blocks_per_grid, threads_per_block](d_CounterArray)
-  # fillTable[blocks_per_grid, threads_per_block](d_Table,d_HashA2,d_InputAReOrdered, d_CounterArray,d_PrefixSum)
-  fillTable[bp2, threads_per_block]            (d_Table,d_HashA2,d_InputAReOrdered, d_CounterArray,d_PrefixSum)
-
-  cuda.synchronize()
+  hg = HashGraph(d_inputA)
   thisTime = time.time()-start
   print('Time taken = %2.6e seconds'%(thisTime))
   print('Rate = %.5e keys/sec'%((inputSize)/thisTime))
 
 
-# # hashA, hashAReordered, binCounts, counterArray, prefixArray
-  # print(d_CounterArray.copy_to_host())
-#   print(cupy.asnumpy(d_BinPrefixSum))
-
-#   stam = numba.cuda.to_device(d_BinPrefixSum)
-
-#   print(numba.cuda.is_cuda_array(stam))
-#   print(numba.cuda.is_cuda_array(d_BinPrefixSum))
-#   print(numba.cuda.is_cuda_array(d_CounterArray))
-
-#   print(type(stam))
-#   print(type(d_BinPrefixSum))
-#   print(type(d_CounterArray))
-#   print(d_BinPrefixSum.dtype)
 
 
-gdf2 = DataFrame()
-# input1 = np.arange(low,high,1, dtype=np.int32)
-input1 = np.random.randint(low,high,inputSize)
+# for i in range(10):
 
-input2 = high-input1-1
-# d_inputA          = cuda.to_device(inputA)
+#   gdf = DataFrame()
+#   # d_inputA = cuda.to_device(inputA)
+#   cuda.synchronize()
 
-d_input1          = cuda.to_device(input1)
-d_input2          = cuda.to_device(input2)
+#   start = time.time()
+
+#   gdf["a"] = d_inputA
+#   gdf["b"] = d_InputAReOrdered
+#   d_HashA = gdf.hash_columns(["a"])
+#   normailizeHashArray[HashGraph.blocks_per_grid, HashGraph.threads_per_block](d_HashA,self.hashRange)
+
+#   resetCounter[HashGraph.blocks_per_grid, HashGraph.threads_per_block](d_BinCounterArray)
+#   countHashBins[HashGraph.blocks_per_grid, HashGraph.threads_per_block](d_HashA,d_BinCounterArray,binSize)
+#   d_BinPrefixSum = numba.cuda.to_device(cupy.cumsum(d_BinCounterArray,dtype=np.uintc))
+
+#   resetCounter[HashGraph.blocks_per_grid, HashGraph.threads_per_block](d_BinCounterArray)
+#   reOrderInput[HashGraph.blocks_per_grid, HashGraph.threads_per_block](d_inputA,d_HashA,d_InputAReOrdered, binSize, d_BinCounterArray, d_BinPrefixSum)
+
+#   # continue;
+#   d_HashA2 = gdf.hash_columns(["b"])
+#   normailizeHashArray[HashGraph.blocks_per_grid, HashGraph.threads_per_block](d_HashA2,hashRange)
+    
+  
+#   resetCounter[HashGraph.blocks_per_grid, HashGraph.threads_per_block](d_CounterArray)
+#   bp2 = (inputSize + (HashGraph.threads_per_block - 1)) // HashGraph.threads_per_block
+#   reOrderHash[bp2, HashGraph.threads_per_block](d_HashA2, d_CounterArray)
 
 
-gdf2["forward"] = d_input1
-d_hashF = gdf2.hash_columns(["forward"])
-gdf2["backward"] = d_input2
-d_hashB = gdf2.hash_columns(["backward"])
+#   d_PrefixSum = numba.cuda.to_device(cupy.cumsum(d_CounterArray,dtype=np.uintc))
+#   resetCounter[HashGraph.blocks_per_grid, HashGraph.threads_per_block](d_CounterArray)
+#   # fillTable[HashGraph.blocks_per_grid, HashGraph.threads_per_block](d_Table,d_HashA2,d_InputAReOrdered, d_CounterArray,d_PrefixSum)
+#   fillTable[bp2, HashGraph.threads_per_block]            (d_Table,d_HashA2,d_InputAReOrdered, d_CounterArray,d_PrefixSum)
 
-normailizeHashArray[blocks_per_grid, threads_per_block](d_hashF,hashRange)
-normailizeHashArray[blocks_per_grid, threads_per_block](d_hashB,hashRange)
-
-
-print(input1[0:10])
-print(input2[-10:])
-
-print(d_hashF[0:10])
-print(d_hashB[-10:])
+#   cuda.synchronize()
+#   thisTime = time.time()-start
+#   print('Time taken = %2.6e seconds'%(thisTime))
+#   print('Rate = %.5e keys/sec'%((inputSize)/thisTime))
 
