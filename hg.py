@@ -73,6 +73,32 @@ def fillTable(table,hashAReordered,d_InputAReOrdered, counterArray,prefixArray):
       table[pos] = d_InputAReOrdered[idx]
 
 
+@cuda.jit
+def querySingleExistance(tableA,prefixArrayA,tableB,prefixArrayB,flagArray):
+    idx  = cuda.grid(1)
+    size   = prefixArrayA.shape[0]-1
+    if(idx<size):
+        sizeAList=prefixArrayA[idx+1]-prefixArrayA[idx];
+        sizeBList=prefixArrayB[idx+1]-prefixArrayB[idx];
+        
+        # if(idx==0):
+        #     print(sizeAList,sizeBList)
+
+        if(sizeBList==0 or sizeAList==0):
+            return
+
+        for b in range(sizeBList):
+            bVal = tableB[prefixArrayB[idx]+b]
+            # if(idx==0):
+            #     print(bVal)
+
+            for a in range(sizeAList):
+                aVal = tableA[prefixArrayA[idx]+a]
+                if(aVal==bVal):
+                    # print("#")
+                    flagArray[prefixArrayB[idx]+b]=1
+                    break
+
 
 class HashGraph:
 
@@ -90,7 +116,6 @@ class HashGraph:
     # self.d_PrefixSum       = cuda.device_array(self.hashRange+1, dtype=np.uintc)
     self.d_table, self.d_PrefixSum = self.build(d_inputA)
 
-    print(self.d_PrefixSum.copy_to_host())
 
   def build(self, d_input):
     d_InputAReOrdered  = cuda.device_array(d_input.shape, dtype=inputA.dtype)
@@ -146,6 +171,17 @@ class HashGraph:
     print('Rate = %.5e keys/sec'%((inputSize)/thisTime))
     return d_table, d_PrefixSum
 
+  def queryExistance(self, d_inputB):
+    d_tableB, d_PrefixSumB = self.build(d_inputB)
+
+    # d_flagArray = cuda.device_array(d_inputB.shape, dtype=np.int8)
+    d_flagArray = cupy.zeros(d_inputB.shape, dtype=np.int8)
+
+    bp2 = (self.hashRange + (HashGraph.threads_per_block - 1)) // HashGraph.threads_per_block
+
+
+    querySingleExistance[bp2, HashGraph.threads_per_block](self.d_table, self.d_PrefixSum, d_tableB, d_PrefixSumB, d_flagArray)
+    return d_flagArray
 
 
 inputSize = 1<<28
@@ -155,22 +191,29 @@ high = inputSize
 # numBins = 1<<14
 # binSize = (hashRange+numBins-1)//numBins
 
-inputA = np.random.randint(low,high,inputSize,dtype=np.int32)
-inputB = np.random.randint(low,high,inputSize,dtype=np.int32)
+np.random.seed(123)
+# inputB = inputA
 
 
-d_inputA           = cuda.device_array(inputA.shape, dtype=inputA.dtype)
-d_inputA           = cuda.to_device(inputA)
+
+for i in range(5):
+
+    inputA = np.random.randint(low,high,inputSize,dtype=np.int32)
+    inputB = np.random.randint(low,high,inputSize,dtype=inputA.dtype)
+    d_inputA           = cuda.device_array(inputA.shape, dtype=inputA.dtype)
+    d_inputA           = cuda.to_device(inputA)
+
+    d_inputB           = cuda.device_array(inputB.shape, dtype=inputA.dtype)
+    d_inputB           = cuda.to_device(inputB)
 
 
-for i in range(10):
-
-  start = time.time()
-  hg = HashGraph(d_inputA)
-
-  thisTime = time.time()-start
-  print('Time taken = %2.6e seconds'%(thisTime))
-  print('Rate = %.5e keys/sec'%((inputSize)/thisTime))
+    start = time.time()
+    hg = HashGraph(d_inputA)
+    flagArray = hg.queryExistance(d_inputB);
+    thisTime = time.time()-start
+    print(flagArray.sum())
+    print('Time taken = %2.6e seconds'%(thisTime))
+    print('Rate = %.5e keys/sec'%((inputSize)/thisTime))
 
 
 
