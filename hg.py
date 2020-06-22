@@ -1,8 +1,6 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[1]:
-
 
 
 import numpy as np
@@ -72,6 +70,12 @@ def fillTable(table,hashAReordered,d_InputAReOrdered, counterArray,prefixArray):
       pos = cuda.atomic.add(counterArray,hashAReordered[idx],1)+prefixArray[hashAReordered[idx]]
       table[pos] = d_InputAReOrdered[idx]
 
+@cuda.jit(device=True)
+def compAndFindFirst(val1, val2, array,index):
+    if (val1==val2):
+        array[index] = 1
+        return False
+
 
 @cuda.jit
 def querySingleExistance(tableA,prefixArrayA,tableB,prefixArrayB,flagArray):
@@ -81,23 +85,22 @@ def querySingleExistance(tableA,prefixArrayA,tableB,prefixArrayB,flagArray):
         sizeAList=prefixArrayA[idx+1]-prefixArrayA[idx];
         sizeBList=prefixArrayB[idx+1]-prefixArrayB[idx];
         
-        # if(idx==0):
-        #     print(sizeAList,sizeBList)
+        # queryFunc = GetFuncByFlag(0)
 
         if(sizeBList==0 or sizeAList==0):
             return
 
         for b in range(sizeBList):
             bVal = tableB[prefixArrayB[idx]+b]
-            # if(idx==0):
-            #     print(bVal)
 
             for a in range(sizeAList):
                 aVal = tableA[prefixArrayA[idx]+a]
                 if(aVal==bVal):
-                    # print("#")
                     flagArray[prefixArrayB[idx]+b]=1
                     break
+                # cont = compAndFindFirst(aVal,bVal,flagArray,prefixArrayB[idx]+b)
+                # if (cont==False):
+                    # break
 
 
 class HashGraph:
@@ -184,7 +187,7 @@ class HashGraph:
     return d_flagArray
 
 
-inputSize = 1<<28
+inputSize = 1<<23
 low = 0
 high = inputSize 
 # hashRange = inputSize >> 2
@@ -192,14 +195,15 @@ high = inputSize
 # binSize = (hashRange+numBins-1)//numBins
 
 np.random.seed(123)
-# inputB = inputA
 
 
 
 for i in range(5):
 
     inputA = np.random.randint(low,high,inputSize,dtype=np.int32)
-    inputB = np.random.randint(low,high,inputSize,dtype=inputA.dtype)
+    # inputB = np.random.randint(low,high,inputSize,dtype=inputA.dtype)
+    inputB = inputA
+
     d_inputA           = cuda.device_array(inputA.shape, dtype=inputA.dtype)
     d_inputA           = cuda.to_device(inputA)
 
@@ -209,11 +213,17 @@ for i in range(5):
 
     start = time.time()
     hg = HashGraph(d_inputA)
+    thisTime = time.time()-start
+    print('Time taken = %2.6e seconds'%(thisTime))
+    print('Rate = %.5e keys/sec'%((inputSize)/thisTime))
+
+
+    start = time.time()
     flagArray = hg.queryExistance(d_inputB);
     thisTime = time.time()-start
     print(flagArray.sum())
     print('Time taken = %2.6e seconds'%(thisTime))
     print('Rate = %.5e keys/sec'%((inputSize)/thisTime))
 
-
+    print("")
 
