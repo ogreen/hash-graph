@@ -77,8 +77,13 @@ def compAndFindFirst(val1, val2, array,index):
         return False
 
 
+#queryType = 0 // Check existance
+#queryType = 1 // Count number of instances
+#queryType = 2 // 
+
+
 @cuda.jit
-def querySingleExistance(tableA,prefixArrayA,tableB,prefixArrayB,flagArray):
+def queryKernel(tableA,prefixArrayA,tableB,prefixArrayB,returnArray, queryType):
     idx  = cuda.grid(1)
     size   = prefixArrayA.shape[0]-1
     if(idx<size):
@@ -95,12 +100,21 @@ def querySingleExistance(tableA,prefixArrayA,tableB,prefixArrayB,flagArray):
 
             for a in range(sizeAList):
                 aVal = tableA[prefixArrayA[idx]+a]
-                if(aVal==bVal):
-                    flagArray[prefixArrayB[idx]+b]=1
-                    break
-                # cont = compAndFindFirst(aVal,bVal,flagArray,prefixArrayB[idx]+b)
-                # if (cont==False):
-                    # break
+                if(queryType==0):
+                    if(aVal==bVal):
+                        returnArray[prefixArrayB[idx]+b]=1
+                        break
+                    continue
+                if(queryType==1):
+                    if(aVal==bVal):
+                        returnArray[prefixArrayB[idx]+b]=returnArray[prefixArrayB[idx]+b]+1
+                    continue
+                # if(queryType==2):
+                #     if(aVal==bVal):
+                #         returnArray[prefixArrayB[idx]+b]=1
+                #         break
+                #     continue
+
 
 
 class HashGraph:
@@ -183,8 +197,20 @@ class HashGraph:
     bp2 = (self.hashRange + (HashGraph.threads_per_block - 1)) // HashGraph.threads_per_block
 
 
-    querySingleExistance[bp2, HashGraph.threads_per_block](self.d_table, self.d_PrefixSum, d_tableB, d_PrefixSumB, d_flagArray)
+    queryKernel[bp2, HashGraph.threads_per_block](self.d_table, self.d_PrefixSum, d_tableB, d_PrefixSumB, d_flagArray, 0)
     return d_flagArray
+
+  def queryCount(self, d_inputB):
+    d_tableB, d_PrefixSumB = self.build(d_inputB)
+
+    # d_flagArray = cuda.device_array(d_inputB.shape, dtype=np.int8)
+    d_countArray = cupy.zeros(d_inputB.shape, dtype=np.int8)
+
+    bp2 = (self.hashRange + (HashGraph.threads_per_block - 1)) // HashGraph.threads_per_block
+
+
+    queryKernel[bp2, HashGraph.threads_per_block](self.d_table, self.d_PrefixSum, d_tableB, d_PrefixSumB, d_countArray, 1)
+    return d_countArray
 
 
 inputSize = 1<<23
@@ -219,7 +245,8 @@ for i in range(5):
 
 
     start = time.time()
-    flagArray = hg.queryExistance(d_inputB);
+    flagArray   = hg.queryExistance(d_inputB);
+    coubntArray = hg.queryCount(d_inputB);
     thisTime = time.time()-start
     print(flagArray.sum())
     print('Time taken = %2.6e seconds'%(thisTime))
