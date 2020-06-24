@@ -71,6 +71,16 @@ def fillTable(table,hashAReordered,d_InputAReOrdered, counterArray,prefixArray):
       pos = cuda.atomic.add(counterArray,hashAReordered[idx],1)+prefixArray[hashAReordered[idx]]
       table[pos] = d_InputAReOrdered[idx]
 
+@cuda.jit
+def fromReOrderedToOriginalOrder(inputReordered,prefixArray,inputOriginalOrder):
+    idx  = cuda.grid(1)
+    size   = inputReordered.shape[0]
+    if(idx<size):
+        inputOriginalOrder[prefixArray[idx]] = inputReordered[idx]
+
+
+
+
 @cuda.jit(device=True)
 def compAndFindFirst(val1, val2, array,index):
     if (val1==val2):
@@ -215,16 +225,20 @@ class HashGraph:
     d_tableB, d_PrefixSumB, d_indicesB = self.build(d_inputB,True)
 
     # d_flagArray = cuda.device_array(d_inputB.shape, dtype=np.int8)
-    d_countArray = cupy.zeros(d_inputB.shape, dtype=np.int8)
+    d_countArray = cupy.zeros(d_inputB.shape, dtype=np.int32)
+    d_countArrayFinal = cuda.device_array(d_inputB.shape, dtype=np.int32)
 
     bp2 = (self.hashRange + (HashGraph.threads_per_block - 1)) // HashGraph.threads_per_block
 
 
     queryKernel[bp2, HashGraph.threads_per_block](self.d_table, self.d_PrefixSum, d_tableB, d_PrefixSumB, d_countArray, 1)
+
+
+    fromReOrderedToOriginalOrder[bp2, HashGraph.threads_per_block](d_countArray,d_indicesB,d_countArrayFinal)
     return d_countArray
 
 
-inputSize = 1<<28
+inputSize = 1<<25
 low = 0
 high = inputSize 
 # hashRange = inputSize >> 2
@@ -237,7 +251,8 @@ np.random.seed(123)
 
 for i in range(5):
 
-    inputA = np.random.randint(low,high,inputSize,dtype=np.int32)
+    # inputA = np.random.randint(low,high,inputSize,dtype=np.int32)
+    inputA = np.arange(low,high,step=1,dtype=np.int32)//2
     # inputB = np.random.randint(low,high,inputSize,dtype=inputA.dtype)
     inputB = inputA
 
@@ -260,6 +275,8 @@ for i in range(5):
     coubntArray = hg.queryCount(d_inputB);
     thisTime = time.time()-start
     print(flagArray.sum())
+    print(coubntArray.sum())
+    
     print('Time taken = %2.6e seconds'%(thisTime))
     print('Rate = %.5e keys/sec'%((inputSize)/thisTime))
 
