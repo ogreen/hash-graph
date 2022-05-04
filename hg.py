@@ -36,15 +36,20 @@ import numpy as np
 import numba
 from numba import cuda
 from numba import jit
-import cupy as cupy
+import cupy as cp
 import time
 import ctypes
 
 import cudf as gd
 from cudf.core.column import column
 from cudf.core.dataframe import DataFrame, Series
-from cudf.tests import utils
+# from cudf.tests import utils
 
+from packaging import version
+if version.parse(cp.__version__) >= version.parse("10.0.0"):
+    cupy_from_dlpack = cp.from_dlpack
+else:
+    cupy_from_dlpack = cp.fromDlpack
 
 
 @cuda.jit
@@ -161,8 +166,8 @@ def queryKernel(tableA,prefixArrayA,tableB,prefixArrayB,returnArray, queryType,i
 
 class HashGraph:
 
-  threads_per_block = 512
-  blocks_per_grid   = 512
+  threads_per_block = 256
+  blocks_per_grid   = 256
 
 
   def __init__(self, d_inputA, need_indices=False, numBins=1<<14):
@@ -170,9 +175,8 @@ class HashGraph:
     self.numBins = numBins
     self.hashRange = (d_inputA.shape[0]) >> 2
     self.binSize = (self.hashRange+numBins-1)//numBins
-
+    self.inputSize = d_inputA.shape[0]
     self.indices_flag = need_indices;
-
     # self.d_table           = cuda.device_array(d_inputA.shape, dtype=inputA.dtype)
     # self.d_PrefixSum       = cuda.device_array(self.hashRange+1, dtype=np.uintc)
     if (need_indices==False):
@@ -182,25 +186,33 @@ class HashGraph:
 
 
   def build(self, d_input, need_indices=False):
-    d_InputAReOrdered  = cuda.device_array(d_input.shape, dtype=inputA.dtype)
+    # d_InputAReOrdered  = cuda.device_array(d_input.shape, dtype=inputA.dtype)
+    d_InputAReOrdered  = cp.empty(d_input.shape, dtype=d_input.dtype)
 
-    d_HashA            = cuda.device_array(d_input.shape, dtype=np.uintc)
-    # d_hashA           = cuda.device_array(d_input.shape, dtype=np.uintc)
+    # d_HashA            = cuda.device_array(d_input.shape, dtype=np.uintc)
+    # print(type(d_HashA))
 
     # Arrays used for HashGraph proceess (size of the hash-range)
-    d_CounterArray    = cuda.device_array(self.hashRange+1, dtype=np.uintc)
+    # d_CounterArray    = cuda.device_array(self.hashRange+1, dtype=np.uintc)
+    d_CounterArray    = cp.empty(self.hashRange+1, dtype=np.uintc)
 
 
-    d_BinCounterArray = cuda.device_array(self.numBins+1, dtype=np.uintc)
-    d_BinPrefixSum    = cuda.device_array(self.numBins+1, dtype=np.uintc)
 
-    d_table           = cuda.device_array(d_input.shape, dtype=inputA.dtype)
-    d_PrefixSum       = cuda.device_array(self.hashRange+1, dtype=np.uintc)
+    # d_BinCounterArray = cuda.device_array(self.numBins+1, dtype=np.uintc)
+    # d_BinPrefixSum    = cuda.device_array(self.numBins+1, dtype=np.uintc)
+    d_BinCounterArray = cp.empty(self.numBins+1, dtype=np.uintc)
+    # d_BinPrefixSum    = cuda.device_array(self.numBins+1, dtype=np.uintc)
 
-    # d_indices         = None
-    # if(indices==True):
-    d_indices         = cuda.device_array(d_input.shape, dtype=np.uintc)
-    d_indicesReorderd = cuda.device_array(d_input.shape, dtype=np.uintc)
+
+    # d_table           = cuda.device_array(d_input.shape, dtype=inputA.dtype)
+    d_table           = cp.empty(d_input.shape, dtype=d_input.dtype)
+    # d_PrefixSum       = cuda.device_array(self.hashRange+1, dtype=np.uintc)
+
+    # d_indices         = cuda.device_array(d_input.shape, dtype=np.uintc)
+    # d_indicesReorderd = cuda.device_array(d_input.shape, dtype=np.uintc)
+    d_indices         = cp.empty(d_input.shape, dtype=np.uintc)
+    d_indicesReorderd = cp.empty(d_input.shape, dtype=np.uintc)
+
 
     start = time.time()
 
@@ -208,35 +220,55 @@ class HashGraph:
 
     gdf["a"] = d_input
     gdf["b"] = d_InputAReOrdered
-    d_HashA = gdf.hash_columns(["a"])
+    # d_HashA = gdf.hash_columns(["a"])
+    # d_HashA = cupy_from_dlpack(gdf["a"].hash_values()
+    d_HashA = gdf["a"].hash_values()
+
+
     normailizeHashArray[HashGraph.blocks_per_grid,HashGraph.threads_per_block](d_HashA,self.hashRange)
 
     resetCounter[HashGraph.blocks_per_grid, HashGraph.threads_per_block](d_BinCounterArray)
     countHashBins[HashGraph.blocks_per_grid, HashGraph.threads_per_block](d_HashA,d_BinCounterArray,self.binSize)
-    d_BinPrefixSum = numba.cuda.to_device(cupy.cumsum(d_BinCounterArray,dtype=np.uintc))
+
+    d_BinPrefixSum = numba.cuda.to_device(cp.cumsum(d_BinCounterArray,dtype=np.uintc))
+
+
+
 
     resetCounter[HashGraph.blocks_per_grid, HashGraph.threads_per_block](d_BinCounterArray)
     reOrderInput[HashGraph.blocks_per_grid, HashGraph.threads_per_block](d_input,d_HashA,d_InputAReOrdered, self.binSize, d_BinCounterArray, d_BinPrefixSum, d_indicesReorderd, need_indices)
 
     # continue;
-    d_hashA = gdf.hash_columns(["b"])
+    # d_hashA = gdf.hash_columns(["b"])
+    d_hashA = gdf["b"].hash_values()
     normailizeHashArray[HashGraph.blocks_per_grid, HashGraph.threads_per_block](d_hashA,self.hashRange)
       
-    
+
+
     resetCounter[HashGraph.blocks_per_grid, HashGraph.threads_per_block](d_CounterArray)
-    bp2 = (inputSize + (HashGraph.threads_per_block - 1)) // HashGraph.threads_per_block
+    bp2 = (self.inputSize + (HashGraph.threads_per_block - 1)) // HashGraph.threads_per_block
     reOrderHash[bp2, HashGraph.threads_per_block](d_hashA, d_CounterArray)
 
 
-    d_PrefixSum = numba.cuda.to_device(cupy.cumsum(d_CounterArray,dtype=np.uintc))
+    d_PrefixSum = numba.cuda.to_device(cp.cumsum(d_CounterArray,dtype=np.uintc))
     resetCounter[HashGraph.blocks_per_grid, HashGraph.threads_per_block](d_CounterArray)
     fillTable[bp2, HashGraph.threads_per_block] (d_table,d_hashA,d_InputAReOrdered, need_indices,d_indicesReorderd, d_indices, d_CounterArray,d_PrefixSum)
 
     cuda.synchronize()
 
+    # print(type(d_HashA))
+    # print(type(d_CounterArray))
+
+    # if(True):
+    #     if(need_indices==False):
+    #         return d_table, d_PrefixSum
+    #     else:
+    #         return d_table, d_PrefixSum, d_indices
+
+
     thisTime = time.time()-start
-    # print('Time taken = %2.6e seconds'%(thisTime))
-    # print('Rate = %.5e keys/sec'%((inputSize)/thisTime))
+    print('Internal Time taken = %2.6e seconds'%(thisTime))
+    print('Internal Rate = %.5e keys/sec'%((self.inputSize)/thisTime))
     if(need_indices==False):
         return d_table, d_PrefixSum
     else:
@@ -249,9 +281,9 @@ class HashGraph:
     # print(d_tableB.copy_to_host())
 
     # d_flagArray = cuda.device_array(d_inputB.shape, dtype=np.int8)
-    d_flagArray = cupy.zeros(d_inputB.shape, dtype=np.int8)
-    d_flagArrayFinal = cupy.zeros(d_inputB.shape, dtype=np.int8)
-    d_dummy = cupy.zeros(1, dtype=np.int32)
+    d_flagArray = cp.zeros(d_inputB.shape, dtype=np.int8)
+    d_flagArrayFinal = cp.zeros(d_inputB.shape, dtype=np.int8)
+    d_dummy = cp.zeros(1, dtype=np.int32)
 
     bp2 = (self.hashRange + (HashGraph.threads_per_block - 1)) // HashGraph.threads_per_block
     queryKernel[bp2, HashGraph.threads_per_block](self.d_table, self.d_PrefixSum, d_tableB, d_PrefixSumB, d_flagArray, 0,d_dummy)
@@ -264,10 +296,10 @@ class HashGraph:
   def queryCount(self, d_inputB):
     d_tableB, d_PrefixSumB, d_indicesB = self.build(d_inputB,True)
 
-    d_countArray = cupy.zeros(d_inputB.shape, dtype=np.int32)
-    d_countArrayFinal = cupy.zeros(d_inputB.shape, dtype=np.int32)
+    d_countArray = cp.zeros(d_inputB.shape, dtype=np.int32)
+    d_countArrayFinal = cp.zeros(d_inputB.shape, dtype=np.int32)
     # d_countArrayFinal = cuda.device_array(d_inputB.shape, dtype=np.int32)
-    d_dummy = cupy.zeros(1, dtype=np.int32)
+    d_dummy = cp.zeros(1, dtype=np.int32)
 
     bp2 = (self.hashRange + (HashGraph.threads_per_block - 1)) // HashGraph.threads_per_block
 
@@ -284,8 +316,8 @@ class HashGraph:
         print("queryFindFirst requires that the HashGraph be built with indices=True in the constructor")
     d_tableB, d_PrefixSumB, d_indicesB = self.build(d_inputB,True)
 
-    d_FirstArray = cupy.zeros(d_inputB.shape, dtype=np.int32)
-    d_FirstArrayFinal = cupy.zeros(d_inputB.shape, dtype=np.int32)
+    d_FirstArray = cp.zeros(d_inputB.shape, dtype=np.int32)
+    d_FirstArrayFinal = cp.zeros(d_inputB.shape, dtype=np.int32)
 
     bp2 = (self.hashRange + (HashGraph.threads_per_block - 1)) // HashGraph.threads_per_block
     queryKernel[bp2, HashGraph.threads_per_block](self.d_table, self.d_PrefixSum, d_tableB, d_PrefixSumB, d_FirstArray, 2, self.d_indices)
@@ -298,56 +330,58 @@ class HashGraph:
     return d_FirstArrayFinal
 
 
-inputSize = 1<<26
-low = 0
-high = inputSize 
-# hashRange = inputSize >> 2
-# numBins = 1<<14
-# binSize = (hashRange+numBins-1)//numBins
+def hgMain():
+    inputSize = 1<<28
+    low = 0
+    high = inputSize 
+    # hashRange = inputSize >> 2
+    # numBins = 1<<14
+    # binSize = (hashRange+numBins-1)//numBins
 
-np.random.seed(123)
-
-
-for i in range(2):
-
-    # inputA = np.random.randint(low,high,inputSize,dtype=np.int32)
-    inputA = np.arange(low,inputSize,step=1,dtype=np.int32)//2
-    # inputB = np.random.randint(low,high,inputSize,dtype=inputA.dtype)
-    inputB = inputA
-
-    d_inputA           = cuda.device_array(inputA.shape, dtype=inputA.dtype)
-    d_inputA           = cuda.to_device(inputA)
-
-    d_inputB           = cuda.device_array(inputB.shape, dtype=inputA.dtype)
-    d_inputB           = cuda.to_device(inputB)
+    np.random.seed(123)
 
 
-    start = time.time()
-    hg = HashGraph(d_inputA,True)
-    thisTime = time.time()-start
-    print('Time taken = %2.6e seconds'%(thisTime))
-    print('Rate = %.5e keys/sec'%((inputSize)/thisTime))
+    for i in range(4):
+
+        # inputA = np.random.randint(low,high,inputSize,dtype=np.int32)
+        inputA = np.arange(low,inputSize,step=1,dtype=np.int32)  # //2
+        # inputB = np.random.randint(low,high,inputSize,dtype=inputA.dtype)
+        inputB = inputA
+
+        d_inputA           = cuda.device_array(inputA.shape, dtype=inputA.dtype)
+        d_inputA           = cuda.to_device(inputA)
+
+        d_inputB           = cuda.device_array(inputB.shape, dtype=inputA.dtype)
+        d_inputB           = cuda.to_device(inputB)
 
 
-    start = time.time()
-    flagArray   = hg.queryExistance(d_inputB)
-    flagTime = time.time()-start    
-    start = time.time()
-    countArray = hg.queryCount(d_inputB)
-    countTime = time.time()-start
-    start = time.time()
-    firstArray = hg.queryFindFirst(d_inputB)
-    firstTime = time.time()-start
-    # print(flagArray)
-    print(flagArray.sum())
-    # print(countArray)
-    print(firstArray[0:100])
-    
-    print('Time taken = %2.6e seconds'%(flagTime))
-    print('Time taken = %2.6e seconds'%(countTime))
-    print('Time taken = %2.6e seconds'%(firstTime))
-    # print('Time taken = %2.6e seconds'%(thisTime))
-    # print('Rate = %.5e keys/sec'%((inputSize)/thisTime))
+        cuda.synchronize()
+        start = time.time()
+        hg = HashGraph(d_inputA,True)
+        thisTime = time.time()-start
+        print('Time taken = %2.6e seconds'%(thisTime))
+        print('Rate = %.5e keys/sec'%((inputSize)/thisTime))
 
-    print("")
+
+        start = time.time()
+        # flagArray   = hg.queryExistance(d_inputB)
+        flagTime = time.time()-start    
+        start = time.time()
+        # countArray = hg.queryCount(d_inputB)
+        countTime = time.time()-start
+        start = time.time()
+        # firstArray = hg.queryFindFirst(d_inputB)
+        firstTime = time.time()-start
+        # print(flagArray)
+        # print(flagArray.sum())
+        # print(countArray)
+        # print(firstArray[0:100])
+        
+        # print('Time taken = %2.6e seconds'%(flagTime))
+        # print('Time taken = %2.6e seconds'%(countTime))
+        # print('Time taken = %2.6e seconds'%(firstTime))
+        # print('Time taken = %2.6e seconds'%(thisTime))
+        # print('Rate = %.5e keys/sec'%((inputSize)/thisTime))
+
+        print("")
 
