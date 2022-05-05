@@ -39,6 +39,8 @@ from numba import jit
 import cupy as cp
 import time
 import ctypes
+from numpy import random
+
 
 import cudf as gd
 from cudf.core.column import column
@@ -170,13 +172,23 @@ class HashGraph:
   blocks_per_grid   = 256
 
 
-  def __init__(self, d_inputA, need_indices=False, numBins=1<<14):
+  def __init__(self, d_inputA, need_indices=False, numBins=1<<14, seedType="deterministic", seed=0):
 
     self.numBins = numBins
     self.hashRange = (d_inputA.shape[0]) >> 2
     self.binSize = (self.hashRange+numBins-1)//numBins
     self.inputSize = d_inputA.shape[0]
     self.indices_flag = need_indices;
+    if(seedType=="deterministic"):
+        self.seed=0 # Any random seed can be used
+    elif (seedType=="random"):
+        self.seed=random.randint(100000000, size=1)[0]
+    elif (seedType=="user-defined"):
+        self.seed=seed
+    else:
+        print("Unsupported seedType. Defaulting to determinstic seed type.")
+        self.seed = 0
+
     # self.d_table           = cuda.device_array(d_inputA.shape, dtype=inputA.dtype)
     # self.d_PrefixSum       = cuda.device_array(self.hashRange+1, dtype=np.uintc)
     if (need_indices==False):
@@ -214,11 +226,11 @@ class HashGraph:
     d_indicesReorderd = cp.empty(d_input.shape, dtype=np.uintc)
 
 
-    start = time.time()
+    # start = time.time()
 
     gdf = DataFrame()
 
-    gdf["a"] = d_input
+    gdf["a"] = d_input+self.seed
     gdf["b"] = d_InputAReOrdered
     # d_HashA = gdf.hash_columns(["a"])
     # d_HashA = cupy_from_dlpack(gdf["a"].hash_values()
@@ -256,19 +268,11 @@ class HashGraph:
 
     cuda.synchronize()
 
-    # print(type(d_HashA))
-    # print(type(d_CounterArray))
-
-    # if(True):
-    #     if(need_indices==False):
-    #         return d_table, d_PrefixSum
-    #     else:
-    #         return d_table, d_PrefixSum, d_indices
 
 
-    thisTime = time.time()-start
-    print('Internal Time taken = %2.6e seconds'%(thisTime))
-    print('Internal Rate = %.5e keys/sec'%((self.inputSize)/thisTime))
+    # thisTime = time.time()-start
+    # print('Internal Time taken = %2.6e seconds'%(thisTime))
+    # print('Internal Rate = %.5e keys/sec'%((self.inputSize)/thisTime))
     if(need_indices==False):
         return d_table, d_PrefixSum
     else:
