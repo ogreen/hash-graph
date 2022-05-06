@@ -39,7 +39,8 @@ from numba import jit
 import cupy as cp
 import time
 import ctypes
-from numpy import random
+# from numpy import random
+from cupy import random
 
 
 import cudf as gd
@@ -175,19 +176,21 @@ class HashGraph:
   def __init__(self, d_inputA, need_indices=False, numBins=1<<14, seedType="deterministic", seed=0):
 
     self.numBins = numBins
-    self.hashRange = (d_inputA.shape[0]) >> 2
+    self.hashRange = (d_inputA.shape[0]) # >> 1
     self.binSize = (self.hashRange+numBins-1)//numBins
     self.inputSize = d_inputA.shape[0]
     self.indices_flag = need_indices;
+    self.seedType = seedType
     if(seedType=="deterministic"):
-        self.seed=0 # Any random seed can be used
+        seedType=="deterministic"
     elif (seedType=="random"):
-        self.seed=random.randint(100000000, size=1)[0]
+        
+        self.seedArray=random.randint(low=0, high=100000000, size=d_inputA.shape[0])
     elif (seedType=="user-defined"):
-        self.seed=seed
+        random.seed(seed)
+        self.seedArray=random.randint(low=0, high=100000000, size=d_inputA.shape[0])
     else:
         print("Unsupported seedType. Defaulting to determinstic seed type.")
-        self.seed = 0
 
     # self.d_table           = cuda.device_array(d_inputA.shape, dtype=inputA.dtype)
     # self.d_PrefixSum       = cuda.device_array(self.hashRange+1, dtype=np.uintc)
@@ -230,8 +233,13 @@ class HashGraph:
 
     gdf = DataFrame()
 
-    gdf["a"] = d_input+self.seed
+    if(self.seedType!="deterministic"):
+        d_input = d_input+self.seedArray
+    
+    
+    gdf["a"] = d_input    
     gdf["b"] = d_InputAReOrdered
+    
     # d_HashA = gdf.hash_columns(["a"])
     # d_HashA = cupy_from_dlpack(gdf["a"].hash_values()
     d_HashA = gdf["a"].hash_values()
@@ -342,7 +350,7 @@ def hgMain():
     # numBins = 1<<14
     # binSize = (hashRange+numBins-1)//numBins
 
-    np.random.seed(123)
+    # np.random.seed(123)
 
 
     for i in range(4):
