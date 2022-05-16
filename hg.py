@@ -342,6 +342,8 @@ class HashGraph:
     return d_FirstArrayFinal
 
 
+
+
 def hgMain():
     inputSize = 1<<28
     low = 0
@@ -397,3 +399,15 @@ def hgMain():
 
         print("")
 
+if __name__ == "__main__":
+
+    # import rmm
+    # pool = rmm.mr.PoolMemoryResource(
+    #                 rmm.mr.CudaMemoryResource(),
+    #                 initial_pool_size=2**33,
+    #                 maximum_pool_size=2**35
+    # )
+    # rmm.mr.set_current_device_resource(pool)
+    
+    
+    hgMain()

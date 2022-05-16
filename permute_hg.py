@@ -5,7 +5,15 @@ import cupy as cp
 from hg import HashGraph
 import cudf as cudf
 
-inputSize = 10e6 #1<<22
+import rmm
+pool = rmm.mr.PoolMemoryResource(
+                rmm.mr.CudaMemoryResource(),
+                initial_pool_size=2**33,
+                maximum_pool_size=2**35
+)
+rmm.mr.set_current_device_resource(pool)
+
+inputSize = 10e0 #1<<22
 low = 0
 high = inputSize 
 # hashRange = inputSize >> 2
