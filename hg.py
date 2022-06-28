@@ -176,7 +176,7 @@ class HashGraph:
   def __init__(self, d_inputA, need_indices=False, numBins=1<<14, seedType="deterministic", seed=0):
 
     self.numBins = numBins
-    self.hashRange = (d_inputA.shape[0]) # >> 1
+    self.hashRange = (d_inputA.shape[0]) >> 1
     self.binSize = (self.hashRange+numBins-1)//numBins
     self.inputSize = d_inputA.shape[0]
     self.indices_flag = need_indices;
@@ -184,11 +184,13 @@ class HashGraph:
     if(seedType=="deterministic"):
         seedType=="deterministic"
     elif (seedType=="random"):
-        
-        self.seedArray=random.randint(low=0, high=100000000, size=d_inputA.shape[0])
+        random.seed(time.time_ns())
+        self.seedArray=random.randint(low=0, high=min(d_inputA.shape[0]*10,2**30), size=d_inputA.shape[0],dtype=np.int32)
+        # print(self.seedArray)
     elif (seedType=="user-defined"):
         random.seed(seed)
-        self.seedArray=random.randint(low=0, high=100000000, size=d_inputA.shape[0])
+        self.seedArray=random.randint(low=0, high=min(d_inputA.shape[0]*10,2**30), size=d_inputA.shape[0],dtype=np.int32)
+        # print(self.seedArray)
     else:
         print("Unsupported seedType. Defaulting to determinstic seed type.")
 
@@ -235,6 +237,8 @@ class HashGraph:
 
     if(self.seedType!="deterministic"):
         d_input = d_input+self.seedArray
+        # print(d_input)
+        
     
     
     gdf["a"] = d_input    
@@ -270,7 +274,9 @@ class HashGraph:
     reOrderHash[bp2, HashGraph.threads_per_block](d_hashA, d_CounterArray)
 
 
-    d_PrefixSum = numba.cuda.to_device(cp.cumsum(d_CounterArray,dtype=np.uintc))
+    # d_PrefixSum = numba.cuda.to_device(cp.cumsum(d_CounterArray,dtype=np.uintc))
+    d_PrefixSum = cp.cumsum(d_CounterArray,dtype=np.uintc)
+
     resetCounter[HashGraph.blocks_per_grid, HashGraph.threads_per_block](d_CounterArray)
     fillTable[bp2, HashGraph.threads_per_block] (d_table,d_hashA,d_InputAReOrdered, need_indices,d_indicesReorderd, d_indices, d_CounterArray,d_PrefixSum)
 
@@ -401,13 +407,13 @@ def hgMain():
 
 if __name__ == "__main__":
 
-    # import rmm
-    # pool = rmm.mr.PoolMemoryResource(
-    #                 rmm.mr.CudaMemoryResource(),
-    #                 initial_pool_size=2**33,
-    #                 maximum_pool_size=2**35
-    # )
-    # rmm.mr.set_current_device_resource(pool)
+    import rmm
+    pool = rmm.mr.PoolMemoryResource(
+                    rmm.mr.CudaMemoryResource(),
+                    initial_pool_size=2**33,
+                    maximum_pool_size=2**35
+    )
+    rmm.mr.set_current_device_resource(pool)
     
     
     hgMain()
